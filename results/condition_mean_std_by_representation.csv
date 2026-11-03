@@ -1,0 +1,22 @@
+condition,representation,mean_accuracy,std_accuracy
+Meac | P40 | VGA100 | B1,Magnitude,100.000000,0.000000
+Meac | P40 | VGA100 | B1,Complex,100.000000,0.000000
+Meac | P40 | VGA100 | B1,Mag+DeltaPhase,100.000000,0.000000
+Meac | P40 | VGA100 | B5,Magnitude,0.000000,0.000000
+Meac | P40 | VGA100 | B5,Complex,0.000000,0.000000
+Meac | P40 | VGA100 | B5,Mag+DeltaPhase,0.000000,0.000000
+Prn | P47 | BW20 | VGA100 | B1,Magnitude,51.653944,47.718065
+Prn | P47 | BW20 | VGA100 | B1,Complex,32.188295,55.751763
+Prn | P47 | BW20 | VGA100 | B1,Mag+DeltaPhase,2.926209,0.440725
+Prn | P47 | BW20 | VGA100 | B5,Magnitude,100.000000,0.000000
+Prn | P47 | BW20 | VGA100 | B5,Complex,100.000000,0.000000
+Prn | P47 | BW20 | VGA100 | B5,Mag+DeltaPhase,100.000000,0.000000
+Spoof | P25 | VGA120 | B1,Magnitude,100.000000,0.000000
+Spoof | P25 | VGA120 | B1,Complex,66.666667,57.735027
+Spoof | P25 | VGA120 | B1,Mag+DeltaPhase,100.000000,0.000000
+Spoof | P25 | VGA120 | B5,Magnitude,0.000000,0.000000
+Spoof | P25 | VGA120 | B5,Complex,0.000000,0.000000
+Spoof | P25 | VGA120 | B5,Mag+DeltaPhase,0.444444,0.444444
+Spoof | P25 | VGA140 | B1,Magnitude,66.037736,57.191221
+Spoof | P25 | VGA140 | B1,Complex,58.700210,51.948061
+Spoof | P25 | VGA140 | B1,Mag+DeltaPhase,41.090147,36.032485

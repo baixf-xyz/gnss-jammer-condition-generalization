@@ -1,0 +1,164 @@
+exp_dir: exp/rf_resnet34
+
+gpus: "[0]"
+
+num_avg: 5
+
+enable_amp: True
+
+# -------------------------------------------------
+# 临时打开：
+# 第一个 epoch 的第一个 batch 打印 IQ/STFT shape
+# -------------------------------------------------
+debug_rf_shape: True
+
+seed: 42
+
+# -------------------------------------------------
+# 先只跑 3 epoch 做 sanity check
+# 跑通以后再改 30 或 40
+# -------------------------------------------------
+num_epochs: 3
+
+save_epoch_interval: 1
+
+log_batch_interval: 20
+
+
+dataloader_args:
+  # 24G 卡先用 64
+  # 如果 OOM 再改 32
+  batch_size: 64
+
+  num_workers: 8
+
+  pin_memory: True
+
+  prefetch_factor: 4
+
+  drop_last: True
+
+
+dataset_args:
+
+  # 我们新增的 RF frontend
+  frontend: rf_stft
+
+  sample_num_per_epoch: 0
+
+  shuffle: True
+
+  shuffle_args:
+    shuffle_size: 2000
+
+  # 非常重要
+  # speech filter 不适合双通道 IQ
+  filter: False
+
+  # Jammertest 当前这批接收机采样率
+  resample_rate: 81000000
+
+  # 每一条 H5 row 最终随机裁：
+  # 16384 complex IQ samples
+  rf_num_samples: 16384
+
+  # random_chunk_rf 中做 RMS normalization
+  rf_normalize: True
+
+  # RF 不做语音 speed perturb
+  speed_perturb: False
+
+  # 先关闭所有 augmentation
+  aug_prob: 0.0
+
+  cmvn: False
+
+  spec_aug: False
+
+  rf_stft_args:
+    n_fft: 512
+    hop_length: 128
+    win_length: 512
+
+    log_scale: True
+    normalize: True
+
+    # complex IQ 使用完整双边频谱
+    center: False
+
+
+# -------------------------------------------------
+# Baseline
+# -------------------------------------------------
+model: ResNet34
+
+model_init: null
+
+
+model_args:
+
+  # train.py 会被 frontend.output_size() 覆盖为 512
+  feat_dim: 512
+
+  embed_dim: 192
+
+  pooling_func: "TSTP"
+
+  two_emb_layer: False
+
+
+# -------------------------------------------------
+# Classification projection
+# -------------------------------------------------
+projection_args:
+
+  project_type: "arc_margin"
+
+  scale: 32.0
+
+  easy_margin: False
+
+
+margin_scheduler: MarginScheduler
+
+
+margin_update:
+
+  initial_margin: 0.0
+
+  final_margin: 0.2
+
+  increase_start_epoch: 1
+
+  fix_start_epoch: 3
+
+  update_margin: True
+
+  increase_type: "linear"
+
+
+loss: CrossEntropyLoss
+
+loss_args: {}
+
+
+optimizer: AdamW
+
+
+optimizer_args:
+
+  weight_decay: 0.0001
+
+
+scheduler: ExponentialDecrease
+
+
+scheduler_args:
+
+  initial_lr: 0.001
+
+  final_lr: 0.00001
+
+  warm_up_epoch: 1
+
+  warm_from_zero: True

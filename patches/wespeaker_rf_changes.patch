@@ -1,0 +1,507 @@
+diff --git a/wespeaker/__init__.py b/wespeaker/__init__.py
+index b3c631c..a8a8df8 100644
+--- a/wespeaker/__init__.py
++++ b/wespeaker/__init__.py
+@@ -1,2 +1,6 @@
+-from wespeaker.cli.speaker import load_model  # noqa
+-from wespeaker.cli.speaker import load_model_pt  # noqa
++"""WeSpeaker package.
++
++Minimal package initialization for GNSS RF experiments.
++CLI imports are intentionally avoided here so optional speech
++dependencies are not loaded when training the RF ResNet baseline.
++"""
+diff --git a/wespeaker/dataset/dataset.py b/wespeaker/dataset/dataset.py
+index ae0be89..781ad42 100644
+--- a/wespeaker/dataset/dataset.py
++++ b/wespeaker/dataset/dataset.py
+@@ -157,7 +157,13 @@ def Dataset(data_type,
+             whole_utt: use whole utt or random chunk
+             repeat_dataset: True for training while False for testing
+     """
+-    assert data_type in ['shard', 'raw', 'feat']
++    # assert data_type in ['shard', 'raw', 'feat']
++    assert data_type in [
++    'shard',
++    'raw',
++    'feat',
++    'rf_h5'
++    ]
+     frontend_type = configs.get('frontend', 'fbank')
+     frontend_args = frontend_type + "_args"
+ 
+@@ -184,13 +190,46 @@ def Dataset(data_type,
+     shuffle = configs.get('shuffle', False)
+     # Global shuffle
+     dataset = DataList(lists, shuffle=shuffle, repeat_dataset=repeat_dataset)
++    # if data_type == 'shard':
++    #     dataset = Processor(dataset, processor.url_opener)
++    #     dataset = Processor(dataset, processor.tar_file_and_group)
++    # elif data_type == 'raw':
++    #     dataset = Processor(dataset, processor.parse_raw)
++    # else:
++    #     dataset = Processor(dataset, processor.parse_feat)
++    
+     if data_type == 'shard':
+-        dataset = Processor(dataset, processor.url_opener)
+-        dataset = Processor(dataset, processor.tar_file_and_group)
++
++        dataset = Processor(
++            dataset,
++            processor.url_opener
++        )
++
++        dataset = Processor(
++            dataset,
++            processor.tar_file_and_group
++        )
++
+     elif data_type == 'raw':
+-        dataset = Processor(dataset, processor.parse_raw)
++
++        dataset = Processor(
++            dataset,
++            processor.parse_raw
++        )
++
++    elif data_type == 'rf_h5':
++
++        dataset = Processor(
++            dataset,
++            processor.parse_rf_h5
++        )
++
+     else:
+-        dataset = Processor(dataset, processor.parse_feat)
++
++        dataset = Processor(
++            dataset,
++            processor.parse_feat
++        )
+ 
+     if configs.get('filter', True):
+         # Filter the data with unwanted length
+@@ -210,16 +249,63 @@ def Dataset(data_type,
+     # spk2id
+     dataset = Processor(dataset, processor.spk_to_id, spk2id_dict)
+ 
++    # if data_type == 'feat':
++    #     if not whole_utt:
++    #         # random chunk
++    #         chunk_len = num_frms = configs.get('num_frms', 200)
++    #         dataset = Processor(dataset, processor.random_chunk, chunk_len,
++    #                             'feat')
++    # else:
++    #     # resample
++    #     resample_rate = configs.get('resample_rate', 16000)
++    #     dataset = Processor(dataset, processor.resample, resample_rate)
+     if data_type == 'feat':
+         if not whole_utt:
+-            # random chunk
+             chunk_len = num_frms = configs.get('num_frms', 200)
+-            dataset = Processor(dataset, processor.random_chunk, chunk_len,
+-                                'feat')
++            dataset = Processor(
++                dataset,
++                processor.random_chunk,
++                chunk_len,
++                'feat'
++            )
++
++    elif data_type == 'rf_raw':
++        rf_num_samples = configs.get(
++            'rf_num_samples',
++            16384
++        )
++
++        dataset = Processor(
++            dataset,
++            processor.random_chunk_rf,
++            rf_num_samples,
++        )
++
++    elif data_type == 'rf_h5':
++
++        rf_num_samples = configs.get(
++            'rf_num_samples',
++            16384
++        )
++
++        dataset = Processor(
++            dataset,
++            processor.random_chunk_rf,
++            rf_num_samples
++        )
++
++
+     else:
+-        # resample
++        # existing speech path
+         resample_rate = configs.get('resample_rate', 16000)
+-        dataset = Processor(dataset, processor.resample, resample_rate)
++
++        dataset = Processor(
++            dataset,
++            processor.resample,
++            resample_rate
++        )
++
++        # 后面的原 speed perturb / wav chunking 保持不变
+         # speed perturb
+         speed_perturb_flag = configs.get('speed_perturb', True)
+         if speed_perturb_flag:
+diff --git a/wespeaker/dataset/processor.py b/wespeaker/dataset/processor.py
+index 08c6271..3194d6b 100644
+--- a/wespeaker/dataset/processor.py
++++ b/wespeaker/dataset/processor.py
+@@ -30,6 +30,8 @@ from scipy.io import wavfile
+ import torch
+ import torchaudio
+ import torchaudio.compliance.kaldi as kaldi
++import h5py
++import numpy as np
+ 
+ AUDIO_FORMAT_SETS = set(['flac', 'mp3', 'm4a', 'ogg', 'opus', 'wav', 'wma'])
+ 
+@@ -585,3 +587,189 @@ def spec_aug(data, num_t_mask=1, num_f_mask=1, max_t=10, max_f=8, prob=0.6):
+                 y[:, start:end] = 0
+             sample['feat'] = y
+         yield sample
++
++def parse_rf_raw(data):
++    """Parse RF IQ sample from json line.
++
++    Expected JSON:
++        {
++            "key": "cw_000001",
++            "iq": "/path/to/cw_000001.npy",
++            "spk": "CW"
++        }
++
++    The npy file must have shape [2, N]:
++        row 0 -> I
++        row 1 -> Q
++    """
++
++    for sample in data:
++        assert 'src' in sample
++
++        json_line = sample['src']
++        obj = json.loads(json_line)
++
++        assert 'key' in obj
++        assert 'iq' in obj
++        assert 'spk' in obj
++
++        key = obj['key']
++        iq_file = obj['iq']
++        spk = obj['spk']
++
++        try:
++            iq = np.load(iq_file)
++
++            if iq.ndim != 2 or iq.shape[0] != 2:
++                raise ValueError(
++                    f"{iq_file}: expected [2, N], got {iq.shape}"
++                )
++
++            iq = torch.from_numpy(
++                iq.astype(np.float32, copy=False)
++            )
++
++            yield {
++                'key': key,
++                'spk': spk,
++                'wav': iq,
++                # Fake field only for compatibility.
++                'sample_rate': obj.get('sample_rate', 20_000_000),
++            }
++
++        except Exception as ex:
++            logging.warning(
++                'Failed to read RF IQ {}: {}'.format(iq_file, ex)
++            )
++def random_chunk_rf(data, chunk_len=16384):
++    """Random crop/pad IQ tensor.
++
++    Input:
++        sample['wav']: [2, N]
++
++    Output:
++        sample['wav']: [2, chunk_len]
++    """
++
++    for sample in data:
++        iq = sample['wav']
++
++        assert iq.ndim == 2
++        assert iq.shape[0] == 2
++
++        length = iq.shape[1]
++
++        if length > chunk_len:
++            start = random.randint(
++                0,
++                length - chunk_len
++            )
++
++            iq = iq[:, start:start + chunk_len]
++
++        elif length < chunk_len:
++            pad_len = chunk_len - length
++
++            iq = torch.nn.functional.pad(
++                iq,
++                (0, pad_len),
++            )
++
++        # RMS normalization.
++        power = (
++            iq[0].pow(2) +
++            iq[1].pow(2)
++        ).mean()
++
++        rms = torch.sqrt(power + 1.0e-8)
++
++        iq = iq / rms
++
++        sample['wav'] = iq
++
++        yield sample
++
++def parse_rf_h5(data):
++    """
++    Parse complex IQ directly from Jammertest HDF5.
++
++    Manifest line example:
++
++    {
++        "key": "area1_0900000_00000",
++        "h5": "/path/Sample_Area1_0900000_0924999.h5",
++        "row": 0,
++        "spk": "Spoof"
++    }
++
++    Jammertest data row:
++        [I0, Q0, I1, Q1, ...]
++
++    Output:
++        wav: [2, N], float32
++    """
++
++    for sample in data:
++        assert 'src' in sample
++
++        try:
++            obj = json.loads(sample['src'])
++
++            assert 'key' in obj
++            assert 'h5' in obj
++            assert 'row' in obj
++            assert 'spk' in obj
++
++            key = obj['key']
++            h5_path = obj['h5']
++            row = int(obj['row'])
++            spk = obj['spk']
++
++            # Open -> read one row -> close.
++            # Safe for DataLoader multiprocessing.
++            with h5py.File(h5_path, 'r') as f:
++                raw = f['data'][row]
++
++            # raw shape: [263120]
++            # IQ samples: 131560 complex samples
++            i = raw[0::2].astype(
++                np.float32,
++                copy=False,
++            )
++
++            q = raw[1::2].astype(
++                np.float32,
++                copy=False,
++            )
++
++            iq = np.stack(
++                [i, q],
++                axis=0,
++            )
++
++            iq = torch.from_numpy(
++                iq
++            ).contiguous()
++
++            example = {
++                'key': key,
++                'spk': spk,
++                'wav': iq,
++
++                # Only metadata; do NOT resample RF.
++                'sample_rate': int(
++                    obj.get(
++                        'sample_rate',
++                        81_000_000,
++                    )
++                ),
++            }
++
++            yield example
++
++        except Exception as ex:
++            logging.warning(
++                'Failed RF H5 sample: %s',
++                ex,
++            )
++
+diff --git a/wespeaker/frontend/__init__.py b/wespeaker/frontend/__init__.py
+index 1c7139d..f2e22fb 100644
+--- a/wespeaker/frontend/__init__.py
++++ b/wespeaker/frontend/__init__.py
+@@ -1,27 +1,10 @@
+-# Copyright (c) 2024 Hongji Wang (jijijiang77@gmail.com)
+-#
+-# Licensed under the Apache License, Version 2.0 (the "License");
+-# you may not use this file except in compliance with the License.
+-# You may obtain a copy of the License at
+-#
+-#     http://www.apache.org/licenses/LICENSE-2.0
+-#
+-# Unless required by applicable law or agreed to in writing, software
+-# distributed under the License is distributed on an "AS IS" BASIS,
+-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-# See the License for the specific language governing permissions and
+-# limitations under the License.
+-
+-
+-from .s3prl import S3prlFrontend
+-from .whisper_encoder import whisper_encoder
+-from .w2vbert import W2VBertFrontend
+-from .tfmel import TFMelFrontend
++from .rf_stft import RFSTFTFrontend
++from .rf_complex_stft import RFComplexSTFTFrontend
++from .rf_mag_phasediff import RFMagPhaseDiffFrontend
+ 
+ frontend_class_dict = {
+     'fbank': None,
+-    's3prl': S3prlFrontend,
+-    'whisper_encoder': whisper_encoder,
+-    'w2vbert': W2VBertFrontend,
+-    'tfmel': TFMelFrontend,
++    'rf_stft': RFSTFTFrontend,
++    'rf_complex_stft': RFComplexSTFTFrontend,
++    'rf_mag_phasediff': RFMagPhaseDiffFrontend,
+ }
+diff --git a/wespeaker/utils/executor.py b/wespeaker/utils/executor.py
+index 1af6e5c..0062ed7 100644
+--- a/wespeaker/utils/executor.py
++++ b/wespeaker/utils/executor.py
+@@ -40,12 +40,103 @@ def run_epoch(dataloader, epoch_iter, model, criterion, optimizer, scheduler,
+             features = batch['feat']  # (B,T,F)
+             features = features.float().to(device)
+         else:  # 's3prl', 'tfmel'
+-            wavs = batch['wav']  # (B,1,W)
+-            wavs = wavs.squeeze(1).float().to(device)  # (B,W)
+-            wavs_len = torch.LongTensor([wavs.shape[1]]).repeat(
+-                wavs.shape[0]).to(device)  # (B)
+-            with torch.cuda.amp.autocast(enabled=configs['enable_amp']):
+-                features, _ = model.module.frontend(wavs, wavs_len)
++            # wavs = batch['wav']  # (B,1,W)
++            # wavs = wavs.squeeze(1).float().to(device)  # (B,W)
++            if frontend_type == 'fbank':
++
++                features = batch['feat']
++                features = features.float().to(device)
++
++            elif frontend_type in (
++                'rf_stft',
++                'rf_complex_stft',
++                'rf_mag_phasediff',
++            ):
++
++                # ----------------------------------------
++                # RF IQ input
++                # expected:
++                # [B, 2, 16384]
++                # ----------------------------------------
++                iq = batch['wav'].float().to(
++                    device,
++                    non_blocking=True,
++                )
++
++                # 只在第一个 epoch、第一个 batch 打印一次
++                if (
++                    configs.get('debug_rf_shape', False)
++                    and i == 0
++                    and epoch == 1
++                ):
++                    logger.info(
++                        'RF IQ shape: {}'.format(
++                            tuple(iq.shape)
++                        )
++                    )
++
++                    logger.info(
++                        'RF IQ dtype: {}'.format(
++                            iq.dtype
++                        )
++                    )
++
++                iq_lens = torch.full(
++                    (iq.size(0),),
++                    iq.size(-1),
++                    dtype=torch.long,
++                    device=device,
++                )
++
++                with torch.cuda.amp.autocast(
++                    enabled=configs['enable_amp']
++                ):
++                    features, _ = model.module.frontend(
++                        iq,
++                        iq_lens,
++                    )
++
++                # ----------------------------------------
++                # RF STFT output
++                # expected:
++                # [B, 125, 512]
++                # ----------------------------------------
++                if (
++                    configs.get('debug_rf_shape', False)
++                    and i == 0
++                    and epoch == 1
++                ):
++                    logger.info(
++                        'RF feature shape: {}'.format(
++                            tuple(features.shape)
++                        )
++                    )
++
++                    logger.info(
++                        'RF feature dtype: {}'.format(
++                            features.dtype
++                        )
++                    )
++
++            else:
++
++                # Original speech frontend path.
++                wavs = batch['wav']
++                wavs = wavs.squeeze(1).float().to(device)
++
++                wavs_len = torch.LongTensor(
++                    [wavs.shape[1]]
++                ).repeat(
++                    wavs.shape[0]
++                ).to(device)
++
++                with torch.cuda.amp.autocast(
++                    enabled=configs['enable_amp']
++                ):
++                    features, _ = model.module.frontend(
++                        wavs,
++                        wavs_len
++                    )
+ 
+         with torch.cuda.amp.autocast(enabled=configs['enable_amp']):
+             # apply cmvn

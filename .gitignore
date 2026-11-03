@@ -1,0 +1,13 @@
+data/
+exp/
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.log
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
